@@ -28,7 +28,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Pobranie najnowszego stabilnego tagu Caddy przez dedykowaną akcję
+      # 2. Pobranie najnowszego stabilnego tagu Caddy
       - name: Fetch latest Caddy version
         id: caddy_version
         uses: oprypin/find-latest-tag@v1
@@ -42,12 +42,14 @@ jobs:
         with:
           go-version: 'stable'
 
-      # 4. Przygotowanie czystego środowiska śledzenia wersji Go
+      # 4. Inicjalizacja trackera (Bezpieczne przekazanie wersji przez system env)
       - name: Initialize Go tracker module
+        env:
+          TARGET_TAG: ${{ steps.caddy_version.outputs.tag }}
         run: |
           mkdir tracker && cd tracker
           go mod init caddy-tracker
-          go get "://github.com{{ steps.caddy_version.outputs.tag }}"
+          go get "://github.com"
 
       # 5. Iteracyjne pobieranie wtyczek z pliku modules.txt
       - name: Resolve custom modules from modules.txt
@@ -83,13 +85,12 @@ jobs:
       # 8. Podjęcie decyzji o uruchomieniu kompilacji
       - name: Evaluate if build is required
         id: decision
+        env:
+          CURR: ${{ steps.checksum.outputs.current_hash }}
+          PREV: ${{ steps.old_checksum.outputs.old_hash }}
         run: |
-          CURR="${{ steps.checksum.outputs.current_hash }}"
-          PREV="${{ steps.old_checksum.outputs.old_hash }}"
-          EVENT="${{ github.event_name }}"
-          
-          if [ "$CURR" != "$PREV" ] || [ "$EVENT" == "workflow_dispatch" ] || [ "$EVENT" == "push" ]; then
-            echo "Wykryto zmiany, ręczne wymuszenie lub push. Zezwalam na kompilację."
+          if [ "$CURR" != "$PREV" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
+            echo "Wykryto zmiany. Zezwalam na kompilację."
             echo "should_build=true" >> $GITHUB_OUTPUT
             mkdir -p .github
             echo "$CURR" > .github/last_build_hash.txt
@@ -98,11 +99,11 @@ jobs:
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
-      # 9. Aktualizacja pliku hashu w Twoim repozytorium (wymaga uprawnień zapisu w Settings)
+      # 9. Aktualizacja pliku haszu w repozytorium
       - name: Commit and push new version hash
         if: steps.decision.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          git config --local user.email "github-actions[bot]@://github.com"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add .github/last_build_hash.txt
           git commit -m "chore: update dependency hash tracker [skip ci]" || exit 0
@@ -117,12 +118,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 11. Konfiguracja zaawansowanego mechanizmu Docker Buildx
+      # 11. Konfiguracja buildera Docker Buildx
       - name: Set up Docker Buildx
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
-      # 12. Kompilacja obrazu Docker i wysłanie do Twojego profilu Packages
+      # 12. Kompilacja obrazu Docker i wysłanie do profilu Packages
       - name: Build and push Docker image
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
