@@ -24,7 +24,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Pobranie najnowszego stabilnego tagu Caddy przez oficjalną akcję
+      # 2. Pobranie najnowszego stabilnego tagu Caddy przez oficjalną akcję (zwraca np. v2.11.7)
       - name: Fetch latest Caddy version
         id: caddy_version
         uses: oprypin/find-latest-tag@v1
@@ -32,13 +32,17 @@ jobs:
           repository: caddyserver/caddy
           releases-only: true
 
-      # 3. Sprawdzenie modułów przez natywne polecenie Git i zamiana nazwy repozytorium na małe litery
+      # 3. Sprawdzenie modułów przez natywne polecenie Git i przygotowanie czystych tagów
       - name: Check modules updates via Git
         id: tracker
         run: |
-          # Bezpieczna konwersja nazwy repozytorium na małe litery w Bashu
+          # Bezpieczna konwersja nazwy repozytorium na małe litery
           LOW_IMAGE=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
           echo "low_image=$LOW_IMAGE" >> $GITHUB_OUTPUT
+
+          # Oczyszczanie tagu z litery 'v' na potrzeby Docker Huba (np. v2.11.7 -> 2.11.7)
+          CLEAN_TAG=$(echo "${{ steps.caddy_version.outputs.tag }}" | sed 's/^v//')
+          echo "clean_tag=$CLEAN_TAG" >> $GITHUB_OUTPUT
 
           echo "caddy=${{ steps.caddy_version.outputs.tag }}" > current_state.txt
           
@@ -107,7 +111,7 @@ jobs:
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
-      # 9. Kompilacja obrazu Docker i wysłanie do profilu Packages (Tagi z małych liter pobrane z kroku 3)
+      # 9. Kompilacja obrazu Docker i wysłanie do profilu Packages (Używa oczyszczonego tagu dla bazy, zachowuje 'v' dla GHCR)
       - name: Build and push Docker image
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
@@ -115,7 +119,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          build-args: CADDY_VERSION=${{ steps.caddy_version.outputs.tag }}
+          build-args: CADDY_VERSION=${{ steps.tracker.outputs.clean_tag }}
           tags: |
             ghcr.io/${{ steps.tracker.outputs.low_image }}:latest
             ghcr.io/${{ steps.tracker.outputs.low_image }}:${{ steps.caddy_version.outputs.tag }}
