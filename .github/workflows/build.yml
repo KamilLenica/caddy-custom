@@ -47,6 +47,6 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
           tags: |
-            ghcr.io/leniek/custom-caddy:latest
+            ghcr.io/kamillenica/custom-caddy:latest
             ${{ inputs.image }}:latest
             ${{ inputs.image }}:${{ inputs.tag }}
