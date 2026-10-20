@@ -14,7 +14,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Funkcja lowercase wymusza konwersję na małe litery (kamillenica/caddy-custom)
+  IMAGE_NAME: ${{ lowercase(github.repository) }}
 
 jobs:
   check-and-build:
@@ -28,7 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Pobranie najnowszego stabilnego tagu Caddy (Zwraca czystą wersję, np. v2.11.7)
+      # 2. Pobranie najnowszego stabilnego tagu Caddy przez oficjalną akcję
       - name: Fetch latest Caddy version
         id: caddy_version
         uses: oprypin/find-latest-tag@v1
@@ -36,30 +37,26 @@ jobs:
           repository: caddyserver/caddy
           releases-only: true
 
-      # 3. Sprawdzenie modułów za pomocą czystego polecenia Git (Pobiera najnowszy commit SHA)
+      # 3. Sprawdzenie modułów przez natywne polecenie Git (Pobiera najnowszy commit SHA)
       - name: Check modules updates via Git
         id: tracker
         run: |
-          # Zapisujemy wersję Caddy na początku pliku stanu
           echo "caddy=${{ steps.caddy_version.outputs.tag }}" > current_state.txt
           
-          # Odczytujemy każdą linię z modules.txt bez narażania się na błędy formatowania tekstowego
           while IFS= read -r raw_module || [ -n "$raw_module" ]; do
             module=$(echo "$raw_module" | tr -d '\r' | xargs)
             if [ -n "$module" ] && [[ ! "$module" =~ ^# ]]; then
               echo "Sprawdzam moduł: $module"
-              # Pobieramy najnowszy commit SHA bezpośrednio z repozytorium przez protokół Git (Bez używania curl i jq)
               SHA=$(git ls-remote "https://$module" HEAD | awk '{print $1}')
               echo "$module=$SHA" >> current_state.txt
             fi
           done < modules.txt
           
-          # Obliczamy hash stanu wejściowego
           CURRENT_HASH=$(sha256sum current_state.txt | awk '{print $1}')
           echo "Bieżący hash sygnatury: $CURRENT_HASH"
           echo "current_hash=$CURRENT_HASH" >> $GITHUB_OUTPUT
 
-      # 4. Odczytanie poprzednio zapisanego hashu (jeśli plik istnieje w repozytorium)
+      # 4. Odczytanie poprzednio zapisanego hashu stanu
       - name: Read previous signature
         id: old_tracker
         run: |
@@ -70,7 +67,7 @@ jobs:
           echo "Poprzedni hash sygnatury: $OLD_HASH"
           echo "old_hash=$OLD_HASH" >> $GITHUB_OUTPUT
 
-      # 5. Porównanie i podjęcie decyzji o budowaniu w oparciu o czysty warunek tekstowy
+      # 5. Podjęcie decyzji o budowaniu
       - name: Evaluate build decision
         id: decision
         run: |
@@ -78,16 +75,16 @@ jobs:
           PREV="${{ steps.old_tracker.outputs.old_hash }}"
           
           if [ "$CURR" != "$PREV" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
-            echo "Wykryto aktualizację lub ręczne wymuszenie. Zezwalam na kompilację."
+            echo "Wykryto zmiany. Rozpoczynam budowanie."
             echo "should_build=true" >> $GITHUB_OUTPUT
             mkdir -p .github
             echo "$CURR" > .github/last_build_hash.txt
           else
-            echo "Brak nowych wersji. Pomijam budowanie."
+            echo "Brak zmian. Pomijam proces."
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
-      # 6. Automatyczny zapis hashu w repozytorium (Wymaga włączonych uprawnień Read/Write w Settings)
+      # 6. Zapisanie nowego hashu stanu bezpośrednio w Twoim repozytorium
       - name: Commit and push new signature hash
         if: steps.decision.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
@@ -97,7 +94,7 @@ jobs:
           git commit -m "chore: update dependency tracker [skip ci]" || exit 0
           git push
 
-      # 7. Logowanie do rejestru GitHub Packages (GHCR)
+      # 7. Logowanie do rejestru kontenerów GitHub Packages (GHCR)
       - name: Log in to the Container registry
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/login-action@v3
@@ -106,12 +103,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 8. Konfiguracja silnika Docker Buildx
+      # 8. Konfiguracja buildera Docker Buildx
       - name: Set up Docker Buildx
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
-      # 9. Kompilacja i wysłanie gotowego obrazu na Twój profil
+      # 9. Kompilacja obrazu Docker i wysłanie do profilu Packages (Wersja z małymi literami w tagach)
       - name: Build and push Docker image
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
