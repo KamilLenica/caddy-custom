@@ -12,11 +12,6 @@ on:
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  # Funkcja lowercase wymusza konwersję na małe litery (kamillenica/caddy-custom)
-  IMAGE_NAME: ${{ lowercase(github.repository) }}
-
 jobs:
   check-and-build:
     runs-on: ubuntu-latest
@@ -37,10 +32,14 @@ jobs:
           repository: caddyserver/caddy
           releases-only: true
 
-      # 3. Sprawdzenie modułów przez natywne polecenie Git (Pobiera najnowszy commit SHA)
+      # 3. Sprawdzenie modułów przez natywne polecenie Git i zamiana nazwy repozytorium na małe litery
       - name: Check modules updates via Git
         id: tracker
         run: |
+          # Bezpieczna konwersja nazwy repozytorium na małe litery w Bashu
+          LOW_IMAGE=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "low_image=$LOW_IMAGE" >> $GITHUB_OUTPUT
+
           echo "caddy=${{ steps.caddy_version.outputs.tag }}" > current_state.txt
           
           while IFS= read -r raw_module || [ -n "$raw_module" ]; do
@@ -88,7 +87,7 @@ jobs:
       - name: Commit and push new signature hash
         if: steps.decision.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.email "github-actions[bot]@://github.com"
           git config --local user.name "github-actions[bot]"
           git add .github/last_build_hash.txt
           git commit -m "chore: update dependency tracker [skip ci]" || exit 0
@@ -99,7 +98,7 @@ jobs:
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -108,7 +107,7 @@ jobs:
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
-      # 9. Kompilacja obrazu Docker i wysłanie do profilu Packages (Wersja z małymi literami w tagach)
+      # 9. Kompilacja obrazu Docker i wysłanie do profilu Packages (Tagi z małych liter pobrane z kroku 3)
       - name: Build and push Docker image
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
@@ -118,5 +117,5 @@ jobs:
           push: true
           build-args: CADDY_VERSION=${{ steps.caddy_version.outputs.tag }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.caddy_version.outputs.tag }}
+            ghcr.io/${{ steps.tracker.outputs.low_image }}:latest
+            ghcr.io/${{ steps.tracker.outputs.low_image }}:${{ steps.caddy_version.outputs.tag }}
