@@ -28,7 +28,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Pobranie najnowszego stabilnego tagu Caddy
+      # 2. Pobranie najnowszego stabilnego tagu Caddy przez oficjalną akcję
       - name: Fetch latest Caddy version
         id: caddy_version
         uses: oprypin/find-latest-tag@v1
@@ -36,25 +36,19 @@ jobs:
           repository: caddyserver/caddy
           releases-only: true
 
-      # 3. Sprawdzenie modułów przez czyste API Proxy języka Go (Bez dwukropków w ścieżkach)
+      # 3. Sprawdzenie modułów przez oficjalne API Go Proxy (Zwraca czyste wersje tekstowe, bez ":" w komendach)
       - name: Check modules updates via Go Proxy
         id: tracker
         run: |
-          # Zapisujemy czystą wersję Caddy do pliku stanu
           echo "caddy=${{ steps.caddy_version.outputs.tag }}" > current_state.txt
           
-          # Czytamy moduły dokładnie tak, jak są w modules.txt
           while IFS= read -r raw_module || [ -n "$raw_module" ]; do
             module=$(echo "$raw_module" | tr -d '\r' | xargs)
             
-            # Pomijamy komentarze i puste linie
             if [ -n "$module" ] && [[ ! "$module" =~ ^# ]]; then
-              echo "Odpytuję Go Proxy dla modułu: $module"
-              
-              # Pobieramy najnowszą stabilną wersję tekstową bezpośrednio z Go Proxy (zwraca JSON, wyciągamy wersję)
+              echo "Sprawdzam moduł: $module"
               VERSION=$(curl -sL "https://golang.org" | tail -n 1)
               
-              # Jeśli proxy nie zwróci listy tagów, pobieramy informacje o wersji "latest"
               if [ -z "$VERSION" ]; then
                 VERSION=$(curl -sL "https://golang.org" | jq -r '.Version')
               fi
@@ -63,7 +57,6 @@ jobs:
             fi
           done < modules.txt
           
-          # Obliczamy końcowy hash bez używania niedozwolonych znaków strukturalnych
           CURRENT_HASH=$(sha256sum current_state.txt | awk '{print $1}')
           echo "Bieżący hash sygnatury: $CURRENT_HASH"
           echo "current_hash=$CURRENT_HASH" >> $GITHUB_OUTPUT
@@ -87,12 +80,12 @@ jobs:
           PREV="${{ steps.old_tracker.outputs.old_hash }}"
           
           if [ "$CURR" != "$PREV" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
-            echo "Wykryto zmiany, ręczne uruchomienie lub push. Rozpoczynam budowanie."
+            echo "Wykryto zmiany. Rozpoczynam budowanie."
             echo "should_build=true" >> $GITHUB_OUTPUT
             mkdir -p .github
             echo "$CURR" > .github/last_build_hash.txt
           else
-            echo "Brak zmian w kodzie źródłowym i modułach. Pomijam proces."
+            echo "Brak zmian. Pomijam proces."
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
@@ -120,7 +113,7 @@ jobs:
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
-      # 9. Kompilacja obrazu Docker (Wstrzyknięcie czystej linii parametrów bez dwukropków w sekcji skryptowej YAML)
+      # 9. Kompilacja obrazu Docker i push do ghcr.io
       - name: Build and push Docker image
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
