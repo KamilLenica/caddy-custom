@@ -42,7 +42,7 @@ jobs:
         with:
           go-version: 'stable'
 
-      # 4. Inicjalizacja trackera (Bezpieczne przekazanie wersji przez system env)
+      # 4. Inicjalizacja trackera (Bezpieczne przekazanie wersji przez TARGET_TAG)
       - name: Initialize Go tracker module
         env:
           TARGET_TAG: ${{ steps.caddy_version.outputs.tag }}
@@ -99,7 +99,7 @@ jobs:
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
-      # 9. Aktualizacja pliku haszu w repozytorium
+      # 9. Aktualizacja pliku hashu w repozytorium
       - name: Commit and push new version hash
         if: steps.decision.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
