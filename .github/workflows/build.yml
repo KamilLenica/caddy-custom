@@ -24,11 +24,11 @@ jobs:
       packages: write
 
     steps:
-      # 1. Pobranie kodu Twojego repozytorium
+      # 1. Pobranie kodu z Twojego repozytorium
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Pobranie najnowszego stabilnego tagu Caddy (np. v2.11.7) przez oficjalną akcję
+      # 2. Pobranie najnowszego stabilnego tagu Caddy
       - name: Fetch latest Caddy version
         id: caddy_version
         uses: oprypin/find-latest-tag@v1
@@ -36,30 +36,39 @@ jobs:
           repository: caddyserver/caddy
           releases-only: true
 
-      # 3. Sprawdzenie najnowszych commitów dla wtyczek za pomocą czystego Gita (Bez Go, bez dwukropków)
-      - name: Check modules updates via Git
+      # 3. Sprawdzenie modułów przez czyste API Proxy języka Go (Bez dwukropków w ścieżkach)
+      - name: Check modules updates via Go Proxy
         id: tracker
         run: |
-          # Zapisujemy wersję Caddy do tymczasowego pliku stanu
+          # Zapisujemy czystą wersję Caddy do pliku stanu
           echo "caddy=${{ steps.caddy_version.outputs.tag }}" > current_state.txt
           
-          # Pobieramy najnowszy commit SHA dla każdego modułu z modules.txt
+          # Czytamy moduły dokładnie tak, jak są w modules.txt
           while IFS= read -r raw_module || [ -n "$raw_module" ]; do
             module=$(echo "$raw_module" | tr -d '\r' | xargs)
+            
+            # Pomijamy komentarze i puste linie
             if [ -n "$module" ] && [[ ! "$module" =~ ^# ]]; then
-              echo "Sprawdzam modul $module"
-              # Pobiera najnowszy commit z domyślnego brancha wtyczki
-              SHA=$(git ls-remote "https://$module" HEAD | awk '{print $1}')
-              echo "$module=$SHA" >> current_state.txt
+              echo "Odpytuję Go Proxy dla modułu: $module"
+              
+              # Pobieramy najnowszą stabilną wersję tekstową bezpośrednio z Go Proxy (zwraca JSON, wyciągamy wersję)
+              VERSION=$(curl -sL "https://golang.org" | tail -n 1)
+              
+              # Jeśli proxy nie zwróci listy tagów, pobieramy informacje o wersji "latest"
+              if [ -z "$VERSION" ]; then
+                VERSION=$(curl -sL "https://golang.org" | jq -r '.Version')
+              fi
+              
+              echo "$module=$VERSION" >> current_state.txt
             fi
           done < modules.txt
           
-          # Obliczamy hash z pliku stanu
+          # Obliczamy końcowy hash bez używania niedozwolonych znaków strukturalnych
           CURRENT_HASH=$(sha256sum current_state.txt | awk '{print $1}')
           echo "Bieżący hash sygnatury: $CURRENT_HASH"
           echo "current_hash=$CURRENT_HASH" >> $GITHUB_OUTPUT
 
-      # 4. Odczytanie poprzedniego hashu (jeśli istnieje)
+      # 4. Odczytanie poprzedniego hashu stanu
       - name: Read previous signature
         id: old_tracker
         run: |
@@ -78,20 +87,20 @@ jobs:
           PREV="${{ steps.old_tracker.outputs.old_hash }}"
           
           if [ "$CURR" != "$PREV" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
-            echo "Wykryto zmiany lub ręczne uruchomienie. Rozpoczynam budowanie."
+            echo "Wykryto zmiany, ręczne uruchomienie lub push. Rozpoczynam budowanie."
             echo "should_build=true" >> $GITHUB_OUTPUT
             mkdir -p .github
             echo "$CURR" > .github/last_build_hash.txt
           else
-            echo "Brak zmian. Pomijam proces."
+            echo "Brak zmian w kodzie źródłowym i modułach. Pomijam proces."
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
-      # 6. Zapisanie nowego hashu w Twoim repozytorium
+      # 6. Zapisanie nowego hashu stanu bezpośrednio w Twoim repozytorium
       - name: Commit and push new signature hash
         if: steps.decision.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          git config --local user.email "github-actions[bot]@://github.com"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add .github/last_build_hash.txt
           git commit -m "chore: update dependency tracker [skip ci]" || exit 0
@@ -111,7 +120,7 @@ jobs:
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
-      # 9. Kompilacja obrazu Docker i wysłanie do Twojego profilu Packages (Bezpieczne przekazanie wersji)
+      # 9. Kompilacja obrazu Docker (Wstrzyknięcie czystej linii parametrów bez dwukropków w sekcji skryptowej YAML)
       - name: Build and push Docker image
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
