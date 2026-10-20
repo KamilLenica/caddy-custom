@@ -24,11 +24,11 @@ jobs:
       packages: write
 
     steps:
-      # 1. Pobranie kodu repozytorium
+      # 1. Pobranie kodu Twojego repozytorium
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Pobranie najnowszego stabilnego tagu Caddy
+      # 2. Pobranie najnowszego stabilnego tagu Caddy (np. v2.11.7) przez oficjalną akcję
       - name: Fetch latest Caddy version
         id: caddy_version
         uses: oprypin/find-latest-tag@v1
@@ -36,80 +36,68 @@ jobs:
           repository: caddyserver/caddy
           releases-only: true
 
-      # 3. Instalacja środowiska Go
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-
-      # 4. Inicjalizacja trackera (Bezpieczne przekazanie wersji przez TARGET_TAG)
-      - name: Initialize Go tracker module
-        env:
-          TARGET_TAG: ${{ steps.caddy_version.outputs.tag }}
+      # 3. Sprawdzenie najnowszych commitów dla wtyczek za pomocą czystego Gita (Bez Go, bez dwukropków)
+      - name: Check modules updates via Git
+        id: tracker
         run: |
-          mkdir tracker && cd tracker
-          go mod init caddy-tracker
-          go get "://github.com"
-
-      # 5. Iteracyjne pobieranie wtyczek z pliku modules.txt
-      - name: Resolve custom modules from modules.txt
-        run: |
-          cd tracker
+          # Zapisujemy wersję Caddy do tymczasowego pliku stanu
+          echo "caddy=${{ steps.caddy_version.outputs.tag }}" > current_state.txt
+          
+          # Pobieramy najnowszy commit SHA dla każdego modułu z modules.txt
           while IFS= read -r raw_module || [ -n "$raw_module" ]; do
             module=$(echo "$raw_module" | tr -d '\r' | xargs)
             if [ -n "$module" ] && [[ ! "$module" =~ ^# ]]; then
-              echo "Sprawdzanie aktualizacji dla modułu: $module"
-              go get "${module}@latest"
+              echo "Sprawdzam modul $module"
+              # Pobiera najnowszy commit z domyślnego brancha wtyczki
+              SHA=$(git ls-remote "https://$module" HEAD | awk '{print $1}')
+              echo "$module=$SHA" >> current_state.txt
             fi
-          done < ../modules.txt
-
-      # 6. Obliczanie bieżącej sumy kontrolnej zależności
-      - name: Compute dependencies checksum
-        id: checksum
-        run: |
-          CURRENT_HASH=$(sha256sum tracker/go.sum | awk '{print $1}')
-          echo "Bieżący hash: $CURRENT_HASH"
+          done < modules.txt
+          
+          # Obliczamy hash z pliku stanu
+          CURRENT_HASH=$(sha256sum current_state.txt | awk '{print $1}')
+          echo "Bieżący hash sygnatury: $CURRENT_HASH"
           echo "current_hash=$CURRENT_HASH" >> $GITHUB_OUTPUT
 
-      # 7. Odczytanie poprzedniego zapisanego haszu
-      - name: Read previous dependencies checksum
-        id: old_checksum
+      # 4. Odczytanie poprzedniego hashu (jeśli istnieje)
+      - name: Read previous signature
+        id: old_tracker
         run: |
           OLD_HASH=""
           if [ -f .github/last_build_hash.txt ]; then
             OLD_HASH=$(cat .github/last_build_hash.txt)
           fi
-          echo "Poprzedni hash: $OLD_HASH"
+          echo "Poprzedni hash sygnatury: $OLD_HASH"
           echo "old_hash=$OLD_HASH" >> $GITHUB_OUTPUT
 
-      # 8. Podjęcie decyzji o uruchomieniu kompilacji
-      - name: Evaluate if build is required
+      # 5. Podjęcie decyzji o budowaniu
+      - name: Evaluate build decision
         id: decision
-        env:
-          CURR: ${{ steps.checksum.outputs.current_hash }}
-          PREV: ${{ steps.old_checksum.outputs.old_hash }}
         run: |
+          CURR="${{ steps.tracker.outputs.current_hash }}"
+          PREV="${{ steps.old_tracker.outputs.old_hash }}"
+          
           if [ "$CURR" != "$PREV" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
-            echo "Wykryto zmiany. Zezwalam na kompilację."
+            echo "Wykryto zmiany lub ręczne uruchomienie. Rozpoczynam budowanie."
             echo "should_build=true" >> $GITHUB_OUTPUT
             mkdir -p .github
             echo "$CURR" > .github/last_build_hash.txt
           else
-            echo "Brak zmian. Kompilacja pominięta."
+            echo "Brak zmian. Pomijam proces."
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
-      # 9. Aktualizacja pliku hashu w repozytorium
-      - name: Commit and push new version hash
+      # 6. Zapisanie nowego hashu w Twoim repozytorium
+      - name: Commit and push new signature hash
         if: steps.decision.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.email "github-actions[bot]@://github.com"
           git config --local user.name "github-actions[bot]"
           git add .github/last_build_hash.txt
-          git commit -m "chore: update dependency hash tracker [skip ci]" || exit 0
+          git commit -m "chore: update dependency tracker [skip ci]" || exit 0
           git push
 
-      # 10. Logowanie do profilu GitHub Packages (GHCR)
+      # 7. Logowanie do rejestru kontenerów GitHub Packages (GHCR)
       - name: Log in to the Container registry
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/login-action@v3
@@ -118,12 +106,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 11. Konfiguracja buildera Docker Buildx
+      # 8. Konfiguracja buildera Docker Buildx
       - name: Set up Docker Buildx
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
-      # 12. Kompilacja obrazu Docker i wysłanie do profilu Packages
+      # 9. Kompilacja obrazu Docker i wysłanie do Twojego profilu Packages (Bezpieczne przekazanie wersji)
       - name: Build and push Docker image
         if: steps.decision.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
@@ -131,8 +119,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          build-args: |
-            CADDY_VERSION=${{ steps.caddy_version.outputs.tag }}
+          build-args: CADDY_VERSION=${{ steps.caddy_version.outputs.tag }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.caddy_version.outputs.tag }}
