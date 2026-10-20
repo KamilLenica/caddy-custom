@@ -78,7 +78,7 @@ jobs:
       - name: Commit and push new version hash
         if: steps.check_updates.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          git config --local user.email "github-actions[bot]@://github.com"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add .github/last_build_hash.txt
           git commit -m "chore: update dependency hash tracker [skip ci]" || exit 0
