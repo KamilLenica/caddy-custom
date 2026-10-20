@@ -40,43 +40,31 @@ jobs:
       - name: Check for updates of Caddy and modules
         id: check_updates
         run: |
-          # Poprawiony URL do oficjalnego API GitHub
-          CADDY_TAG=$(curl -s https://github.com | jq -r '.tag_name')
+          CADDY_TAG=$(curl -sL -H "Accept: application/vnd.github+json" https://github.com | jq -r '.tag_name')
           echo "caddy_tag=$CADDY_TAG" >> $GITHUB_OUTPUT
           
-          # Inicjalizacja tymczasowego modułu Go w celu wyliczenia zależności i pobrania najnowszych wersji wtyczek
           mkdir tracker && cd tracker
           go mod init caddy-tracker
-          
-          # Dodanie Caddy w najnowszej wersji stabilnej
           go get ://github.com
           
-          # Dodanie wszystkich wtyczek linia po linii z pliku modules.txt (pomijając puste linie i komentarze)
           while IFS= read -r module || [ -n "$module" ]; do
             [[ -z "$module" || "$module" =~ ^# ]] && continue
             echo "Sprawdzam najnowszą wersję modułu: $module"
             go get "$module"@latest
           done < ../modules.txt
           
-          # Generowanie unikalnego hasha z wynikowego pliku go.sum (zawiera wersje Caddy i wszystkich modułów)
           CURRENT_HASH=$(sha256sum go.sum | awk '{print $1}')
           echo "Bieżący hash zależności: $CURRENT_HASH"
           
-          # Odczytanie hasha z poprzedniego udanego uruchomienia (jeśli istnieje zapasowy plik)
           OLD_HASH=""
           if [ -f ../.github/last_build_hash.txt ]; then
             OLD_HASH=$(cat ../.github/last_build_hash.txt)
           fi
           echo "Poprzedni hash zależności: $OLD_HASH"
           
-          # Porównanie hashów. Budujemy jeśli:
-          # - Hash się różni (nowy release Caddy lub modułu)
-          # - Zdarzenie to ręczne wywołanie (workflow_dispatch) lub bezpośredni push do repozytorium
           if [ "$CURRENT_HASH" != "$OLD_HASH" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
             echo "Wykryto nowe wydanie Caddy lub aktualizację modułów! Uruchamiam kompilację."
             echo "should_build=true" >> $GITHUB_OUTPUT
-            
-            # Zapisanie nowego hasha do wykorzystania przy następnym uruchomieniu crona
             mkdir -p ../.github
             echo "$CURRENT_HASH" > ../.github/last_build_hash.txt
           else
