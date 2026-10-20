@@ -2,6 +2,7 @@ name: Build Custom Caddy
 
 on:
   schedule:
+    # Uruchamia sprawdzenie automatycznie co godzinę
     - cron: '0 * * * *'
   push:
     branches:
@@ -10,7 +11,7 @@ on:
       - 'modules.txt'
       - 'Dockerfile'
       - '.github/workflows/build.yml'
-  workflow_dispatch:
+  workflow_dispatch: # Pozwala na ręczne wymuszenie budowania z panelu Actions
 
 env:
   REGISTRY: ghcr.io
@@ -24,42 +25,58 @@ jobs:
       packages: write
 
     steps:
+      # 1. Pobranie kodu z Twojego repozytorium
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Instalacja środowiska Go na maszynie wirtualnej
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
 
+      # 3. Dynamiczne wygenerowanie pliku go.mod w celu sprawdzenia zależności
+      # Pobiera najnowszy oficjalny tag wydania Caddy (tylko wersje release) i najnowsze wersje modułów z modules.txt
       - name: Check for updates of Caddy and modules
         id: check_updates
         run: |
+          # Poprawiony URL do oficjalnego API GitHub
           CADDY_TAG=$(curl -s https://github.com | jq -r '.tag_name')
           echo "caddy_tag=$CADDY_TAG" >> $GITHUB_OUTPUT
           
+          # Inicjalizacja tymczasowego modułu Go w celu wyliczenia zależności i pobrania najnowszych wersji wtyczek
           mkdir tracker && cd tracker
           go mod init caddy-tracker
+          
+          # Dodanie Caddy w najnowszej wersji stabilnej
           go get ://github.com
           
+          # Dodanie wszystkich wtyczek linia po linii z pliku modules.txt (pomijając puste linie i komentarze)
           while IFS= read -r module || [ -n "$module" ]; do
             [[ -z "$module" || "$module" =~ ^# ]] && continue
             echo "Sprawdzam najnowszą wersję modułu: $module"
             go get "$module"@latest
           done < ../modules.txt
           
+          # Generowanie unikalnego hasha z wynikowego pliku go.sum (zawiera wersje Caddy i wszystkich modułów)
           CURRENT_HASH=$(sha256sum go.sum | awk '{print $1}')
           echo "Bieżący hash zależności: $CURRENT_HASH"
           
+          # Odczytanie hasha z poprzedniego udanego uruchomienia (jeśli istnieje zapasowy plik)
           OLD_HASH=""
           if [ -f ../.github/last_build_hash.txt ]; then
             OLD_HASH=$(cat ../.github/last_build_hash.txt)
           fi
           echo "Poprzedni hash zależności: $OLD_HASH"
           
+          # Porównanie hashów. Budujemy jeśli:
+          # - Hash się różni (nowy release Caddy lub modułu)
+          # - Zdarzenie to ręczne wywołanie (workflow_dispatch) lub bezpośredni push do repozytorium
           if [ "$CURRENT_HASH" != "$OLD_HASH" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
             echo "Wykryto nowe wydanie Caddy lub aktualizację modułów! Uruchamiam kompilację."
             echo "should_build=true" >> $GITHUB_OUTPUT
+            
+            # Zapisanie nowego hasha do wykorzystania przy następnym uruchomieniu crona
             mkdir -p ../.github
             echo "$CURRENT_HASH" > ../.github/last_build_hash.txt
           else
@@ -67,6 +84,7 @@ jobs:
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
+      # 4. Jeśli wykryto zmiany, zapisujemy nowy hash w repozytorium, aby cron wiedział o aktualizacji przy kolejnym teście
       - name: Commit and push new version hash
         if: steps.check_updates.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
@@ -76,6 +94,7 @@ jobs:
           git commit -m "chore: update dependency hash tracker [skip ci]" || exit 0
           git push
 
+      # 5. Logowanie do GitHub Packages (GHCR)
       - name: Log in to the Container registry
         if: steps.check_updates.outputs.should_build == 'true'
         uses: docker/login-action@v3
@@ -84,10 +103,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 6. Konfiguracja buildera Docker Buildx
       - name: Set up Docker Buildx
         if: steps.check_updates.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
+      # 7. Kompilacja obrazu Docker i wysłanie do ghcr.io
       - name: Build and push Docker image
         if: steps.check_updates.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
