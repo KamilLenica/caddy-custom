@@ -36,18 +36,27 @@ jobs:
           go-version: 'stable'
 
       # 3. Dynamiczne wygenerowanie pliku go.mod w celu sprawdzenia zależności
-      # Pobiera najnowszy oficjalny tag wydania Caddy (tylko wersje release) i najnowsze wersje modułów z modules.txt
       - name: Check for updates of Caddy and modules
         id: check_updates
         run: |
           CADDY_TAG=$(curl -sL -H "Accept: application/vnd.github+json" https://github.com | jq -r '.tag_name')
+          
+          if [ -z "$CADDY_TAG" ] || [ "$CADDY_TAG" == "null" ]; then
+            echo "Blad: Nie udalo sie pobrac poprawnego tagu Caddy z API GitHub."
+            exit 1
+          fi
+          
+          echo "Wykryty tag Caddy: $CADDY_TAG"
           echo "caddy_tag=$CADDY_TAG" >> $GITHUB_OUTPUT
           
           mkdir tracker && cd tracker
           go mod init caddy-tracker
           go get ://github.com
           
-          while IFS= read -r module || [ -n "$module" ]; do
+          while IFS= read -r raw_module || [ -n "$raw_module" ]; do
+            # Usuniecie znakow powrotu karetki \r (Windows compatibility) i spacji
+            module=$(echo "$raw_module" | tr -d '\r' | xargs)
+            
             [[ -z "$module" || "$module" =~ ^# ]] && continue
             echo "Sprawdzam najnowszą wersję modułu: $module"
             go get "$module"@latest
@@ -72,11 +81,11 @@ jobs:
             echo "should_build=false" >> $GITHUB_OUTPUT
           fi
 
-      # 4. Jeśli wykryto zmiany, zapisujemy nowy hash w repozytorium, aby cron wiedział o aktualizacji przy kolejnym teście
+      # 4. Zapisanie nowego haszu w repozytorium (wymaga uprawnień zapisu w Settings repozytorium)
       - name: Commit and push new version hash
         if: steps.check_updates.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         run: |
-          git config --local user.email "github-actions[bot]@://github.com"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add .github/last_build_hash.txt
           git commit -m "chore: update dependency hash tracker [skip ci]" || exit 0
