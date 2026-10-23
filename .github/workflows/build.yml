@@ -1,125 +1,79 @@
-name: Build Custom Caddy
+name: 2. Execute Caddy Compilation
 
 on:
-  schedule:
-    - cron: '0 * * * *'
-  push:
-    branches:
-      - main
-    paths:
-      - 'modules.txt'
-      - 'Dockerfile'
-      - '.github/workflows/build.yml'
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      caddy_tag:
+        required: true
+        type: string
+      clean_tag:
+        required: true
+        type: string
+      low_image:
+        required: true
+        type: string
 
 jobs:
-  check-and-build:
+  compile-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
-
     steps:
-      # 1. Pobranie kodu z Twojego repozytorium
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Pobranie najnowszego stabilnego tagu Caddy przez oficjalną akcję (zwraca np. v2.11.7)
-      - name: Fetch latest Caddy version
-        id: caddy_version
-        uses: oprypin/find-latest-tag@v1
+      - name: Setup Go Environment
+        uses: actions/setup-go@v5
         with:
-          repository: caddyserver/caddy
-          releases-only: true
+          go-version: 'stable'
 
-      # 3. Sprawdzenie modułów przez natywne polecenie Git i przygotowanie czystych tagów
-      - name: Check modules updates via Git
-        id: tracker
+      - name: Install xcaddy compiler
+        run: go install ://github.com
+
+      - name: Dynamiczne budowanie komendy kompilacji (z formatowaniem \)
         run: |
-          # Bezpieczna konwersja nazwy repozytorium na małe litery
-          LOW_IMAGE=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "low_image=$LOW_IMAGE" >> $GITHUB_OUTPUT
-
-          # Oczyszczanie tagu z litery 'v' na potrzeby Docker Huba (np. v2.11.7 -> 2.11.7)
-          CLEAN_TAG=$(echo "${{ steps.caddy_version.outputs.tag }}" | sed 's/^v//')
-          echo "clean_tag=$CLEAN_TAG" >> $GITHUB_OUTPUT
-
-          echo "caddy=${{ steps.caddy_version.outputs.tag }}" > current_state.txt
+          # Inicjalizacja bazowego polecenia z wymaganą wersją rdzenia Caddy
+          CMD="xcaddy build ${{ inputs.caddy_tag }}"
           
-          while IFS= read -r raw_module || [ -n "$raw_module" ]; do
-            module=$(echo "$raw_module" | tr -d '\r' | xargs)
-            if [ -n "$module" ] && [[ ! "$module" =~ ^# ]]; then
-              echo "Sprawdzam moduł: $module"
-              SHA=$(git ls-remote "https://$module" HEAD | awk '{print $1}')
-              echo "$module=$SHA" >> current_state.txt
-            fi
+          # Odczyt pliku tekstowego modules.txt linia po linii
+          while read -r line || [ -n "$line" ]; do
+            clean=$(echo "$line" | tr -d '\r' | xargs)
+            
+            # Pomijanie linii pustych i komentarzy
+            [[ -z "$clean" || "$clean" =~ ^# ]] && continue
+            
+            # Doklejanie kolejnych modułów z zachowaniem znaku \
+            CMD="$CMD \\\n  --with $clean"
           done < modules.txt
           
-          CURRENT_HASH=$(sha256sum current_state.txt | awk '{print $1}')
-          echo "Bieżący hash sygnatury: $CURRENT_HASH"
-          echo "current_hash=$CURRENT_HASH" >> $GITHUB_OUTPUT
-
-      # 4. Odczytanie poprzednio zapisanego hashu stanu
-      - name: Read previous signature
-        id: old_tracker
-        run: |
-          OLD_HASH=""
-          if [ -f .github/last_build_hash.txt ]; then
-            OLD_HASH=$(cat .github/last_build_hash.txt)
-          fi
-          echo "Poprzedni hash sygnatury: $OLD_HASH"
-          echo "old_hash=$OLD_HASH" >> $GITHUB_OUTPUT
-
-      # 5. Podjęcie decyzji o budowaniu
-      - name: Evaluate build decision
-        id: decision
-        run: |
-          CURR="${{ steps.tracker.outputs.current_hash }}"
-          PREV="${{ steps.old_tracker.outputs.old_hash }}"
+          # Renderowanie ostatecznego ciągu znaków w powłoce Bash
+          CMD=$(echo -e "$CMD")
           
-          if [ "$CURR" != "$PREV" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
-            echo "Wykryto zmiany. Rozpoczynam budowanie."
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            mkdir -p .github
-            echo "$CURR" > .github/last_build_hash.txt
-          else
-            echo "Brak zmian. Pomijam proces."
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          fi
+          echo "=== WYGENEROWANE POLECENIE BASH ==="
+          echo "$CMD"
+          echo "===================================="
+          
+          # Wykonanie utworzonej dynamicznie instrukcji kompilacji
+          eval "$CMD"
 
-      # 6. Zapisanie nowego hashu stanu bezpośrednio w Twoim repozytorium
-      - name: Commit and push new signature hash
-        if: steps.decision.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-        run: |
-          git config --local user.email "github-actions[bot]@://github.com"
-          git config --local user.name "github-actions[bot]"
-          git add .github/last_build_hash.txt
-          git commit -m "chore: update dependency tracker [skip ci]" || exit 0
-          git push
-
-      # 7. Logowanie do rejestru kontenerów GitHub Packages (GHCR)
-      - name: Log in to the Container registry
-        if: steps.decision.outputs.should_build == 'true'
+      - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 8. Konfiguracja buildera Docker Buildx
-      - name: Set up Docker Buildx
-        if: steps.decision.outputs.should_build == 'true'
+      - name: Set up Docker Buildx Environment
         uses: docker/setup-buildx-action@v3
 
-      # 9. Kompilacja obrazu Docker i wysłanie do profilu Packages (Używa oczyszczonego tagu dla bazy, zachowuje 'v' dla GHCR)
-      - name: Build and push Docker image
-        if: steps.decision.outputs.should_build == 'true'
+      - name: Build and push final production Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
-          build-args: CADDY_VERSION=${{ steps.tracker.outputs.clean_tag }}
+          build-args: CADDY_VERSION=${{ inputs.clean_tag }}
           tags: |
-            ghcr.io/${{ steps.tracker.outputs.low_image }}:latest
-            ghcr.io/${{ steps.tracker.outputs.low_image }}:${{ steps.caddy_version.outputs.tag }}
+            ghcr.io/${{ inputs.low_image }}:latest
+            ghcr.io/${{ inputs.low_image }}:${{ inputs.caddy_tag }}
