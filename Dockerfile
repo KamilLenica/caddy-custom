@@ -1,7 +1,4 @@
-# 1. Definiujemy globalny ARG przed jakimkolwiek FROM i przypisujemy mu domyślną wartość "latest"
-ARG CADDY_VERSION=latest
-
-FROM caddy:${CADDY_VERSION}-builder AS builder
+FROM caddy:2-builder AS builder
 # Deklarujemy argumenty budowania przekazane z GitHub Actions
 ARG CADDY_VERSION
 ARG XCADDY_MODULES
@@ -10,7 +7,7 @@ ARG XCADDY_MODULES
 RUN xcaddy build ${XCADDY_MODULES}
 
 # Etap finalny - czysty obraz produkcyjny
-FROM caddy:${CADDY_VERSION}
+FROM caddy:2
 
 # Podmieniamy standardowy plik binarny naszym customowym
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
