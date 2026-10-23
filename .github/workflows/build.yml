@@ -23,27 +23,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-        - name: Wygeneruj argumenty modułów z ukośnikami
+      - name: Wygeneruj argumenty modułów dla Dockera
         id: caddy_args
         run: |
           ARGS=""
           
+          # Czytamy plik tekstowy modules.txt linia po linii
           while read -r line || [ -n "$line" ]; do
             clean=$(echo "$line" | tr -d '\r' | xargs)
+            
+            # Pomijanie linii pustych i komentarzy
             [[ -z "$clean" || "$clean" =~ ^# ]] && continue
             
-            # Zbieramy argumenty w jeden ciąg tekstowy
+            # Doklejanie kolejnych modułów oddzielonych spacjami
             ARGS="$ARGS --with $clean"
           done < modules.txt
           
-          # xargs usunie zbędne białe znaki i entery, robiąc z tego jedną linię
+          # Spłaszczamy tekst do jednej linii i usuwamy zbędne spacje
           FINAL_ARGS=$(echo "$ARGS" | xargs)
           
           echo "=== WYGENEROWANA LINIA DLA DOCKERA ==="
           echo "$FINAL_ARGS"
           echo "======================================="
           
-          # Zapisujemy jako zwykłą, jedno-liniową zmienną środowiskową
+          # Zapisujemy jako standardową zmienną środowiskową
           echo "modules_string=$FINAL_ARGS" >> $GITHUB_ENV
 
       - name: Log in to GitHub Container Registry (GHCR)
@@ -63,6 +66,7 @@ jobs:
           file: ./Dockerfile
           push: true
           build-args: |
+            CADDY_VERSION=${{ inputs.clean_tag }}
             XCADDY_MODULES=${{ env.modules_string }}
           tags: |
             ghcr.io/${{ inputs.low_image }}:latest
