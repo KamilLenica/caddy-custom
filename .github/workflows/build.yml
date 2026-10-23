@@ -71,4 +71,4 @@ jobs:
             XCADDY_MODULES=${{ env.modules_string }}
           tags: |
             ghcr.io/${{ inputs.low_image }}:latest
-            ghcr.io/${{ inputs.low_image }}:${{ inputs.caddy_tag }}
+            ghcr.io/${{ inputs.low_image }}:${{ inputs.clean_tag }}
