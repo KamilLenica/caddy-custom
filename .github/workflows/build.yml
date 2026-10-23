@@ -66,7 +66,8 @@ jobs:
           file: ./Dockerfile
           push: true
           build-args: |
-            CADDY_VERSION=${{ inputs.clean_tag }}
+            CADDY_VERSION=${{ inputs.caddy_tag }}
+            CADDY_DOCKER=${{ inputs.clean_tag }}
             XCADDY_MODULES=${{ env.modules_string }}
           tags: |
             ghcr.io/${{ inputs.low_image }}:latest
