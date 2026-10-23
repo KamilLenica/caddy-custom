@@ -1,4 +1,6 @@
-FROM caddy:2-builder AS builder
+ARG CADDY_VERSION
+
+FROM caddy:${CADDY_VERSION}-builder AS builder
 # Deklarujemy argumenty budowania przekazane z GitHub Actions
 ARG CADDY_VERSION
 ARG XCADDY_MODULES
@@ -7,7 +9,7 @@ ARG XCADDY_MODULES
 RUN xcaddy build ${XCADDY_MODULES}
 
 # Etap finalny - czysty obraz produkcyjny
-FROM caddy:2
+FROM caddy:${CADDY_VERSION}
 
 # Podmieniamy standardowy plik binarny naszym customowym
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
