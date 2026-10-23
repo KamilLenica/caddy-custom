@@ -1,0 +1,105 @@
+name: 1. Check Custom Caddy Dependencies
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - 'modules.txt'
+      - 'Dockerfile'
+      - '.github/workflows/check.yml'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  check-dependencies:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      should_build: ${{ steps.decision.outputs.should_build }}
+      caddy_tag: ${{ steps.caddy_version.outputs.tag }}
+      clean_tag: ${{ steps.tracker.outputs.clean_tag }}
+      low_image: ${{ steps.tracker.outputs.low_image }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch latest Caddy version
+        id: caddy_version
+        uses: oprypin/find-latest-tag@v1
+        with:
+          repository: caddyserver/caddy
+          releases-only: true
+
+      - name: Check modules updates via Git
+        id: tracker
+        run: |
+          LOW_IMAGE=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "low_image=$LOW_IMAGE" >> $GITHUB_OUTPUT
+
+          CLEAN_TAG=$(echo "${{ steps.caddy_version.outputs.tag }}" | sed 's/^v//')
+          echo "clean_tag=$CLEAN_TAG" >> $GITHUB_OUTPUT
+
+          echo "caddy=${{ steps.caddy_version.outputs.tag }}" > current_state.txt
+          
+          while IFS= read -r raw_module || [ -n "$raw_module" ]; do
+            module=$(echo "$raw_module" | tr -d '\r' | xargs)
+            if [ -n "$module" ] && [[ ! "$module" =~ ^# ]]; then
+              echo "Sprawdzam moduł: $module"
+              SHA=$(git ls-remote "https://$module" HEAD | awk '{print $1}')
+              echo "$module=$SHA" >> current_state.txt
+            fi
+          done < modules.txt
+          
+          CURRENT_HASH=$(sha256sum current_state.txt | awk '{print $1}')
+          echo "Bieżący hash sygnatury: $CURRENT_HASH"
+          echo "current_hash=$CURRENT_HASH" >> $GITHUB_OUTPUT
+
+      - name: Read previous signature
+        id: old_tracker
+        run: |
+          OLD_HASH=""
+          if [ -f .github/last_build_hash.txt ]; then
+            OLD_HASH=$(cat .github/last_build_hash.txt)
+          fi
+          echo "Poprzedni hash sygnatury: $OLD_HASH"
+          echo "old_hash=$OLD_HASH" >> $GITHUB_OUTPUT
+
+      - name: Evaluate build decision
+        id: decision
+        run: |
+          CURR="${{ steps.tracker.outputs.current_hash }}"
+          PREV="${{ steps.old_tracker.outputs.old_hash }}"
+          
+          if [ "$CURR" != "$PREV" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ] || [ "${{ github.event_name }}" == "push" ]; then
+            echo "Wykryto zmiany lub wymuszono uruchomienie. Rozpoczynam budowanie."
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            mkdir -p .github
+            echo "$CURR" > .github/last_build_hash.txt
+          else
+            echo "Brak zmian. Pomijam proces."
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push new signature hash
+        if: steps.decision.outputs.should_build == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .github/last_build_hash.txt
+          git commit -m "chore: update dependency tracker [skip ci]" || exit 0
+          git push
+
+  # Wywołanie drugiego workflow (reusable workflow) jeśli warunek logiczny jest spełniony
+  trigger-build:
+    needs: check-dependencies
+    if: needs.check-dependencies.outputs.should_build == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      caddy_tag: ${{ needs.check-dependencies.outputs.caddy_tag }}
+      clean_tag: ${{ needs.check-dependencies.outputs.clean_tag }}
+      low_image: ${{ needs.check-dependencies.outputs.low_image }}
+    secrets: inherit
