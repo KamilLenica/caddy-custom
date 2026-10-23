@@ -1,14 +1,18 @@
-ARG CADDY_VERSION
+# Globalny ARG odbierający czystą wersję bez 'v' (np. 2.11.7) przekazaną z CADDY_DOCKER
+ARG CADDY_DOCKER=latest
 
-FROM caddy:${CADDY_VERSION}-builder AS builder
-# Deklarujemy argumenty budowania przekazane z GitHub Actions
-ARG CADDY_DOCKER
+# --- ETAP BUDOWANIA ---
+FROM caddy:${CADDY_DOCKER}-builder AS builder
+
+# Deklarujemy argumenty budowania wewnątrz etapu
+ARG CADDY_VERSION
 ARG XCADDY_MODULES
 
-# Uruchamiamy kompilację składając bazę z przekazanym stringiem modułów
+# Czysta kompilacja bez użycia pamięci podręcznej (cache)
 RUN xcaddy build ${XCADDY_MODULES}
 
-# Etap finalny - czysty obraz produkcyjny
+
+# --- ETAP FINALNY ---
 FROM caddy:${CADDY_DOCKER}
 
 # Podmieniamy standardowy plik binarny naszym customowym
