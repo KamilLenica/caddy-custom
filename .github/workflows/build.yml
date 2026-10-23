@@ -23,18 +23,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Go Environment
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-
-      - name: Install xcaddy compiler
-        run: go install ://github.com
-
-      - name: Dynamiczne budowanie komendy kompilacji (z formatowaniem \)
+      - name: Wygeneruj argumenty modułów z ukośnikami
+        id: caddy_args
         run: |
-          # Inicjalizacja bazowego polecenia z wymaganą wersją rdzenia Caddy
-          CMD="xcaddy build ${{ inputs.caddy_tag }}"
+          # Inicjalizacja pustego ciągu dla modułów
+          ARGS=""
           
           # Odczyt pliku tekstowego modules.txt linia po linii
           while read -r line || [ -n "$line" ]; do
@@ -43,19 +36,21 @@ jobs:
             # Pomijanie linii pustych i komentarzy
             [[ -z "$clean" || "$clean" =~ ^# ]] && continue
             
-            # Doklejanie kolejnych modułów z zachowaniem znaku \
-            CMD="$CMD \\\n  --with $clean"
+            # Doklejanie kolejnych modułów z jawnym ukośnikiem i znakiem nowej linii
+            ARGS="$ARGS --with $clean \\\n"
           done < modules.txt
           
-          # Renderowanie ostatecznego ciągu znaków w powłoce Bash
-          CMD=$(echo -e "$CMD")
+          # Usuwamy ostatni ukośnik z końca stringa, aby polecenie nie miało błędu składni
+          ARGS=$(echo -e "$ARGS" | sed 's/\\\s*$//')
           
-          echo "=== WYGENEROWANE POLECENIE BASH ==="
-          echo "$CMD"
-          echo "===================================="
+          echo "=== WYGENEROWANY STRING DLA DOCKERA ==="
+          echo -e "$ARGS"
+          echo "======================================="
           
-          # Wykonanie utworzonej dynamicznie instrukcji kompilacji
-          eval "$CMD"
+          # Zapisujemy do formatu wielolinijkowego w GitHub Actions Environment
+          echo "modules_string<<EOF" >> $GITHUB_ENV
+          echo -e "$ARGS"
+          echo "EOF" >> $GITHUB_ENV
 
       - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
@@ -73,7 +68,8 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          build-args: CADDY_VERSION=${{ inputs.clean_tag }}
+          build-args: |
+            XCADDY_MODULES=${{ env.modules_string }}
           tags: |
             ghcr.io/${{ inputs.low_image }}:latest
             ghcr.io/${{ inputs.low_image }}:${{ inputs.caddy_tag }}
