@@ -1,9 +1,12 @@
+# 1. Definiujemy globalny ARG przed jakimkolwiek FROM i przypisujemy mu domyślną wartość "latest"
+ARG CADDY_VERSION=latest
+
+FROM caddy:${CADDY_VERSION}-builder AS builder
 # Deklarujemy argumenty budowania przekazane z GitHub Actions
 ARG CADDY_VERSION
 ARG XCADDY_MODULES
 
 # Uruchamiamy kompilację składając bazę z przekazanym stringiem modułów
-FROM caddy:${CADDY_VERSION}-builder AS builder
 RUN xcaddy build ${XCADDY_MODULES}
 
 # Etap finalny - czysty obraz produkcyjny
