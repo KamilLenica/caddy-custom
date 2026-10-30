@@ -4,3 +4,7 @@ github.com/fvbommel/caddy-combine-ip-ranges
 github.com/mholt/caddy-l4
 github.com/paolobietolini/caddy-x402
 github.com/CarsonHoffman/caddy-discord-interactions-verifier
+github.com/caddyserver/transform-encoder
+github.com/hslatman/caddy-crowdsec-bouncer/http@main
+github.com/hslatman/caddy-crowdsec-bouncer/appsec@main
+github.com/hslatman/caddy-crowdsec-bouncer/layer4@main
